@@ -1,0 +1,1 @@
+ntpconfig: configure head node as ntp server and compute nodes as ntp clients.
