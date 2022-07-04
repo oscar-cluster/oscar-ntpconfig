@@ -75,6 +75,11 @@
   </clientDeps>
   <apiDeps/>
   <changelog>
+    <versionEntry version="2.1.0-1">
+      <changelogEntry authorName="Olivier Lahaye" date="2022-07-04T17:17:21+02:00">
+        <item>Add support for chrony configuration on newer redhat like distros</item>
+      </changelogEntry>
+    </versionEntry>
     <versionEntry version="2.0.7-1.1">
       <changelogEntry authorName="Olivier Lahaye" date="2014-07-11T15:25:17+02:00">
         <item>Rebuild to avoid conflicts with new disttag in rpm distros</item>
