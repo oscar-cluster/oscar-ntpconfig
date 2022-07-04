@@ -9,6 +9,10 @@
   <uri>http://oscar.openclustergroup.org/</uri>
   <authors>
     <author cat="maintainer">
+      <name>Olivier Lahaye</name>
+      <email>olivier.lahaye@cea.fr</email>
+    </author>
+    <author cat="maintainer">
       <name>Bernard Li</name>
       <email>bli@bcgsc.ca</email>
     </author>
@@ -23,9 +27,17 @@
         <dist>fc</dist>
         <dist>mdk</dist>
         <dist>mdv</dist>
-        <dist>rhel</dist>
+	<dist version="6" >rhel</dist>
+	<dist version="7" >rhel</dist>
       </filters>
       <pkg>ntp</pkg>
+    </requires>
+    <requires>
+      <filters>
+	<dist version="8" >rhel</dist>
+	<dist version="9" >rhel</dist>
+      </filters>
+      <pkg>chrony</pkg>
     </requires>
     <requires>
       <filters>
@@ -41,9 +53,17 @@
         <dist>fc</dist>
         <dist>mdk</dist>
         <dist>mdv</dist>
-        <dist>rhel</dist>
+	<dist version="6" >rhel</dist>
+	<dist version="7" >rhel</dist>
       </filters>
       <pkg>ntp</pkg>
+    </requires>
+    <requires>
+      <filters>
+	<dist version="8" >rhel</dist>
+	<dist version="9" >rhel</dist>
+      </filters>
+      <pkg>chrony</pkg>
     </requires>
     <requires>
       <filters>

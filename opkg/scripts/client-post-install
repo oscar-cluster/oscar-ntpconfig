@@ -17,9 +17,8 @@
 # Copyright (C) 2005-2006 Bernard Li <bli@bcgsc.ca>
 #               All rights reserved
 
-# This script sets the ntp server for the client nodes (via the image in the
-# chroot environment) to be the OSCAR headnode signified by the alias
-# oscar-server
+# This script enables the ntp service (as client) for the client nodes (via the image in the
+# chroot environment
 
 use Carp;
 use OSCAR::SystemServices;

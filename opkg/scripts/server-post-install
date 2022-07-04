@@ -22,6 +22,7 @@
 
 use lib "$ENV{OSCAR_HOME}/lib";
 use OSCAR::Opkg;
+use OSCAR::OpkgDB;
 use OSCAR::Network;
 use OSCAR::Database;
 use OSCAR::Configurator_backend;
@@ -30,73 +31,149 @@ use OSCAR::SystemServicesDefs;
 use OSCAR::FileUtils;
 use Carp;
 
+
 my $ntpBuffer = "";
+my $ntp_service_name = OSCAR::OCA::OS_Settings::getitem(NTP()."_service");
 my $ntp_conf = OSCAR::OCA::OS_Settings::getitem(NTP()."_configfile");
-my $ntp_dir = OSCAR::OCA::OS_Settings::getitem(NTP()."_configdir");;
-my $step_tickers = "$ntp_dir/step-tickers";
-my $configurator = "$ENV{OSCAR_PACKAGE_HOME}/configurator.html";
+my $configurator = opkg_get_configurator_file('ntpconfig');
 
-# get headnode's interface information from OSCAR database
-my $iface = OSCAR::Database::get_headnode_iface(undef, undef);
+# 1st, create a backup of the config file if not already done.
+backup_file_if_not_exist($ntp_conf) or (carp "ERROR: Couldn't backup $ntp_conf.\n", exit 1);
 
-open(CONF, $ntp_conf) or croak("Failed to open $ntp_conf");
+# 2nd, read configurations (OSCAR from db and NTP service from config file)
 
-while ($line = <CONF>) {
-    $ntpBuffer = $ntpBuffer.$line;
-}
-                                                                                
-close(CONF, $ntp_conf);
+my ($network, $cidr) = getNetworkAndMask4Nodes();
 
-my ($ip, $broadcast, $netmask) = interface2ip($iface);
-my @results=split('\.', $ip);
-                                                                                
-$results[3]=0;
-$network = join(".", @results);
+# Try to read user configured values.
 
-# SUSE Linux's xntp package does not create /etc/ntp, create it here
-!system("mkdir $ntp_dir") or croak("Failed to mkdir $ntp_dir") if !(-d $ntp_dir);
-
-# User has configured ntpconfig package with a NTP server
-if (-e $configurator) {
-    my $ref = OSCAR::Configurator_backend::readInConfigValues($configurator,
+my $ref;
+if (defined($configurator) && -e $configurator) {
+     $ref = OSCAR::Configurator_backend::readInConfigValues($configurator,
         "ntpconfig", "", noarray=>1);
-    # If ntpconfig package has configured NTP server before, replace
-    if ($ntpBuffer =~ /User selected NTP Server/) {
-	    $ntpBuffer =~ s/^server.*\nrestrict.*\n/server  $ref->{ntpserver}\nrestrict $ref->{ntpserver} mask 255.255.255.255\n/m;
-        # ntpconfig package has not previously configured NTP server
-    } elsif ($ntpBuffer =~ /Added by OSCAR package ntpconfig/) {
-	    $ntpBuffer =~ s/# Added by OSCAR package ntpconfig\n/# Added by OSCAR package ntpconfig\n# User selected NTP Server\nserver  $ref->{ntpserver}\nrestrict $ref->{ntpserver} mask 255.255.255.255\n/m;
-    # ntpconfig package has not been installed previously
-    } else {
-        # 1st, create a backup of the config file if not already done.
-        backup_file_if_not_exist($ntp_conf) or (carp "ERROR: Couldn't backup $ntp_conf.\n", exit 1);
-    	$ntpBuffer = "# Added by OSCAR package ntpconfig\n# User selected NTP Server\nserver  $ref->{ntpserver}\nrestrict $ref->{ntpserver} mask 255.255.255.255\nrestrict $network mask $netmask\n\n".$ntpBuffer;
-    }
+ }
 
-    # populate the step-tickers file with ntp server specified
-    open(STEP, ">$step_tickers") or croak("Failed to open $step_tickers");
-    print STEP $ref->{ntpserver};
-    close (STEP);
+# Open config file for writing
+open(CONFIG, ">$ntp_conf") or croak("Failed to open $ntp_conf");
+print CONFIG "# Configuration by OSCAR package ntpconfig (server-post-install)\n\n";
 
-# User has not configured ntpconfig package, sets up NTP server for local use only
-} else {
-    # If ntpconfig package has configured NTP server before, remove
-    if ($ntpBuffer =~ /User selected NTP Server/) {
-        $ntpBuffer =~ s/^# User selected NTP Server\nserver.*\nrestrict.*\n//m;
-    # ntpconfig package has not been installed previously
-    } else {
-	if (!($ntpBuffer =~ /Added by OSCAR package ntpconfig/)) {
-	    system("cp $ntp_conf $ntp_conf.oscarbak");
-    	    $ntpBuffer = "# Added by OSCAR package ntpconfig\nrestrict $network mask $netmask\n\n".$ntpBuffer;
+# Handle Chrony and Ntpd configuration separately.
+if ("$ntp_service_name" eq "chronyd") {
+	if((defined $ref->{ntpserver}) && ($ref->{ntpserver} ne "")) {
+		print CONFIG <<"END";
+# Reference server (where we take our tile).
+server $ref->{ntpserver} iburst
+END
+	} else { # We're alone: no time source
+		print CONFIG <<"END";
+# Serve time even if not synchronized to a time source.
+local stratum 8
+END
 	}
-    }
+	print CONFIG <<"END";
+
+# Clients nodes allowed to take time reference from us:
+allow $network/$cidr
+
+# Record the rate at which the system clock gains/losses time.
+driftfile /var/lib/chrony/drift
+
+# Allow the system clock to be stepped in the first three updates
+# if its offset is larger than 1 second.
+makestep 1.0 3
+
+# Enable kernel synchronization of the real-time clock (RTC).
+rtcsync
+
+# Specify file containing keys for NTP authentication.
+keyfile /etc/chrony.keys
+
+# Get TAI-UTC offset and leap seconds from the system tz database.
+leapsectz right/UTC
+
+# Specify directory for log files.
+logdir /var/log/chrony
+# END of configuration for chronyd.
+END
+	    close (CONFIG);
+
+
+} elsif ("$ntp_service_name" =~ m/^ntp/) {
+	my $ntp_dir = OSCAR::OCA::OS_Settings::getitem(NTP()."_configdir");;
+	my $step_tickers = "$ntp_dir/step-tickers";
+
+	# SUSE Linux's xntp package does not create /etc/ntp, create it here
+	!system("mkdir $ntp_dir") or croak("Failed to mkdir $ntp_dir") if !(-d $ntp_dir);
+	
+	if((defined $ref->{ntpserver}) && ($ref->{ntpserver} ne "")) {
+
+		# Only define step tickers if we have an ntp source server.
+		open(STEP, ">$step_tickers") or croak("Failed to open $step_tickers");
+		print STEP $ref->{ntpserver};
+		close (STEP);
+
+		my $netmask = cidr2netmask($cidr);
+		print CONFIG <<"END";
+# User selected NTP Server (our ntp source)
+server $ref->{ntpserver}
+restrict $ref->{ntpserver} mask 255.255.255.255
+END
+	} else {
+		print CONFIG <<"END";
+# User did not select NTP Server (no ntp source)"
+END
+	}
+	print CONFIG <<"END";
+
+# OSCAR Nodes are allowed to query time from us.
+restrict $network mask $netmask
+
+# For more information about this file, see the man pages
+# ntp.conf(5), ntp_acc(5), ntp_auth(5), ntp_clock(5), ntp_misc(5), ntp_mon(5).
+
+driftfile /var/lib/ntp/drift
+
+# Permit time synchronization with our time source, but do not
+# permit the source to query or modify the service on this system.
+restrict default nomodify notrap nopeer noquery
+
+# Permit all access over the loopback interface.  This could
+# be tightened as well, but to do so would effect some of
+# the administrative functions.
+restrict 127.0.0.1
+restrict ::1
+
+# Enable public key cryptography.
+#crypto
+
+includefile /etc/ntp/crypto/pw
+
+# Key file containing the keys and key identifiers used when operating
+# with symmetric key cryptography. 
+keys /etc/ntp/keys
+
+# Specify the key identifiers which are trusted.
+#trustedkey 4 8 42
+
+# Specify the key identifier to use with the ntpdc utility.
+#requestkey 8
+
+# Specify the key identifier to use with the ntpq utility.
+#controlkey 8
+# Disable the monitoring facility to prevent amplification attacks using ntpdc
+# monlist command when default restrict does not include the noquery flag. See
+# CVE-2013-5211 for more details.
+# Note: Monitoring will not be disabled with the limited restriction flag.
+disable monitor
+# END of configuration for ntpd.
+END
+
+} else {
+	# ERROR unknown NTP system
+	die "Unknbwo NTP service type: [$ntp_service_name]";
 }
 
-$ntpBuffer =~ s/^authenticate/# authenticate/m;
+close(CONFIG);
 
-open(CONF, ">$ntp_conf") or croak("Failed to open $ntp_conf");
-print CONF $ntpBuffer;
-close(CONF);
 
 opkg_print("enabling ntp service at boot time on server\n");
 !enable_system_services( (NTP) )
@@ -105,5 +182,32 @@ opkg_print("enabling ntp service at boot time on server\n");
 opkg_print("restarting ntp service\n");
 !system_service(NTP,RESTART)
     or die "ERROR: Couldn't restart ntp service on server.";
+
+sub getNetworkAndMask4Nodes() {
+	# get headnode's interface information from OSCAR database
+	my $oscar_interface = OSCAR::Database::get_headnode_iface(undef, undef);
+	die "Can't get oscar_interface." if (! defined $oscar_interface);
+
+	# Get Interface IP address and netmask in cidr format.
+	open(IP_ADDR_SHOW,"/sbin/ip -o addr show $oscar_interface |")
+		or (oscar_log(1, ERROR, "Couldn't run '/sbin/ip addr show $oscar_interface'"), exit 1);
+	my $ipregex = '\d+\.\d+\.\d+\.\d+';
+	while(<IP_ADDR_SHOW>) {
+		if(/\s+inet ($ipregex)\/([0-9]{2}) brd $ipregex scope .*$/o) {
+			($ip, $cidr) = ($1,$2);
+			last;
+		}
+	}
+	close(IP_ADDR_SHOW);
+
+	# Get network address from IP and cidr netmask.
+	# Code inspired from IPv4Addr.pm (Francis J. Lacoste).
+	my $u32 = unpack "N", pack "CCCC", split /\./, $ip;
+	my $bits = "1" x $cidr . "0" x (32 - $cidr );
+	my $msk = unpack "N", pack "B*", $bits;
+	$network = join ".", unpack "CCCC", pack "N", $u32 & $msk;
+
+	return($network,$cidr);
+}
 
 exit(0);

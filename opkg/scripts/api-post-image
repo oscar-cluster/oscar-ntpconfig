@@ -1,27 +1,41 @@
 #!/bin/bash
+# Script that configure NTP in image dir (run on server non-chrooted)
 
 IMAGEDIR=$1
 
 # FIXME: rewrite this in perl and use OS_Settings to get correct ntp.conf file.
 # Note: image can be for another OS: be carefull.
 
-sed -i -e 's/^server/# server/g' -e 's/^authenticate/# authenticate/g' ${IMAGEDIR}/etc/ntp.conf
+if test -f ${IMAGEDIR}/etc/chrony.conf
+then
+	# remove any pool or server line
+	sed -i -e 's/^pool/# pool/g' -e 's/^server/d' ${IMAGEDIR}/etc/chrony.conf
+	if test -z "$(grep OSCAR ${IMAGEDIR}/etc/chrony.conf)"
+	then # Add OSCAR configuration comment
+		sed -i -e '1i\# OSCAR Configuration\n' ${IMAGEDIR}/etc/chrony.conf
+	fi
+	# Add server line after # OSCAR line
+	sed -i -e sed '/^# OSCAR Configuration*[^\n]*/,$!b;//{x;//p;g};//!H;$!d;x;s//&\nserver oscar-server iburst/' /tmp/chrony.conf 
+else
+	sed -i -e 's/^server/# server/g' -e 's/^authenticate/# authenticate/g' ${IMAGEDIR}/etc/ntp.conf
 
-# step-tickers files contain a server to sync with before starting the service.
-# This is to make sure that ntp service will work (if time differs for more than
-# 1000 seconds, ntpd will not modify the date/time.
-cat >${IMAGEDIR}/etc/ntp/step-tickers <<EOF
+	# step-tickers files contain a server to sync with before starting the service.
+	# This is to make sure that ntp service will work (if time differs for more than
+	# 1000 seconds, ntpd will not modify the date/time.
+	cat >${IMAGEDIR}/etc/ntp/step-tickers <<EOF
 # List of servers used for initial synchronization.
 
 oscar-server
 EOF
 
-# Set OSCAR ntp configuration
-cat >> ${IMAGEDIR}/etc/ntp.conf <<EOF
+	# Set OSCAR ntp configuration
+	cat >> ${IMAGEDIR}/etc/ntp.conf <<EOF
 
 # Section added by $0 after image creation.
 server oscar-server
 restrict oscar-server mask 255.255.255.255
 EOF
+
+fi
 
 exit 0
